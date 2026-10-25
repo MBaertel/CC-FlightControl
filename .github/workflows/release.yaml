@@ -1,0 +1,92 @@
+name: Build Release Installer
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Generate installer
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 <<'PY'
+          import json
+          import os
+          import subprocess
+
+          tag = os.environ["RELEASE_TAG"]
+
+          files = subprocess.check_output(
+              ["git", "ls-files", "-z", "--", "*.lua"]
+          ).decode().split("\0")
+          files = sorted(path for path in files if path)
+
+          if not files:
+              raise SystemExit("No Lua files found")
+
+          with open("install.lua", "w", encoding="utf-8") as f:
+              f.write("-- Generated automatically by GitHub Actions.\n")
+              f.write("-- Release: " + tag + "\n\n")
+              f.write("local release = " + json.dumps(tag) + "\n")
+              f.write("local files = {\n")
+              for path in files:
+                  f.write("  " + json.dumps(path) + ",\n")
+              f.write("}\n\n")
+
+              f.write("""
+          local baseUrl =
+              "https://raw.githubusercontent.com/MBaertel/ControlScripts/"
+              .. release .. "/"
+
+          for _, path in ipairs(files) do
+              local url = baseUrl .. path
+              print("Installing " .. path)
+
+              local response, err = http.get(url)
+              if not response then
+                  error("Download failed for " .. path .. ": "
+                      .. tostring(err))
+              end
+
+              local content = response.readAll()
+              response.close()
+
+              local parent = fs.getDir(path)
+              if parent ~= "" then
+                  fs.makeDir(parent)
+              end
+
+              local handle = fs.open(path, "w")
+              if not handle then
+                  error("Could not open " .. path .. " for writing")
+              end
+
+              handle.write(content)
+              handle.close()
+          end
+
+          print("Installation complete.")
+          """)
+
+          print(f"Generated installer for {len(files)} Lua files.")
+          PY
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            install.lua \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes
