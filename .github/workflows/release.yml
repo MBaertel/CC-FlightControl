@@ -1,9 +1,8 @@
 name: Build Release Installer
 
 on:
-  push:
-    tags:
-      - "v*"
+  release:
+    types: [published]
 
 permissions:
   contents: write
@@ -13,12 +12,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out repository
+      - name: Check out release tag
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
 
       - name: Generate installer
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           python3 <<'PY'
           import json
@@ -37,23 +38,22 @@ jobs:
 
           with open("install.lua", "w", encoding="utf-8") as f:
               f.write("-- Generated automatically by GitHub Actions.\n")
-              f.write("-- Release: " + tag + "\n\n")
               f.write("local release = " + json.dumps(tag) + "\n")
               f.write("local files = {\n")
+
               for path in files:
                   f.write("  " + json.dumps(path) + ",\n")
-              f.write("}\n\n")
 
+              f.write("}\n\n")
               f.write("""
           local baseUrl =
               "https://raw.githubusercontent.com/MBaertel/ControlScripts/"
               .. release .. "/"
 
           for _, path in ipairs(files) do
-              local url = baseUrl .. path
               print("Installing " .. path)
 
-              local response, err = http.get(url)
+              local response, err = http.get(baseUrl .. path)
               if not response then
                   error("Download failed for " .. path .. ": "
                       .. tostring(err))
@@ -82,11 +82,9 @@ jobs:
           print(f"Generated installer for {len(files)} Lua files.")
           PY
 
-      - name: Create GitHub Release
+      - name: Upload installer to existing release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
-            install.lua \
-            --title "${GITHUB_REF_NAME}" \
-            --generate-notes
+          gh release upload "$RELEASE_TAG" install.lua --clobber
