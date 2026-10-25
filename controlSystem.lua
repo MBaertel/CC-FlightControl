@@ -1,5 +1,5 @@
-local FlightControl = {}
-FlightControl.__index = FlightControl
+local ControlSystem = {}
+ControlSystem.__index = ControlSystem
 
 local CATEGORY = {
     input = "inputs",
@@ -57,7 +57,7 @@ local function subscribeExternal(bus, external)
     end
 end
 
-function FlightControl.new(config)
+function ControlSystem.new(config)
     config = config or {}
 
     assert(type(config.id) == "string",
@@ -103,14 +103,14 @@ function FlightControl.new(config)
         outputs = {},
 
         external = external,
-    }, FlightControl)
+    }, ControlSystem)
 
     subscribeExternal(self.bus, self.external)
 
     return self
 end
 
-function FlightControl:register(component, kind, spec)
+function ControlSystem:register(component, kind, spec)
     spec = spec or {}
 
     assert(CATEGORY[kind],
@@ -136,29 +136,29 @@ function FlightControl:register(component, kind, spec)
     return component
 end
 
-function FlightControl:registerInput(component, spec)
+function ControlSystem:registerInput(component, spec)
     return self:register(component, "input", spec)
 end
 
-function FlightControl:registerSensor(component, spec)
+function ControlSystem:registerSensor(component, spec)
     return self:register(component, "sensor", spec)
 end
 
-function FlightControl:registerController(component, spec)
+function ControlSystem:registerController(component, spec)
     return self:register(component, "controller", spec)
 end
 
-function FlightControl:registerMixer(component, spec)
+function ControlSystem:registerMixer(component, spec)
     return self:register(component, "mixer", spec)
 end
 
-function FlightControl:registerActuator(component, spec)
+function ControlSystem:registerActuator(component, spec)
     return self:register(component, "actuator", spec)
 end
 
 -- Publish to the fully qualified topic.
 -- hasValue=false communicates that the signal should be cleared.
-function FlightControl:_publish(category, name, value)
+function ControlSystem:_publish(category, name, value)
     local content = {
         hasValue = value ~= nil,
     }
@@ -170,7 +170,7 @@ function FlightControl:_publish(category, name, value)
     self.bus:publish(signalName(category, name), content)
 end
 
-function FlightControl:_publishIfPublic(entry, category, name, value)
+function ControlSystem:_publishIfPublic(entry, category, name, value)
     if entry.public then
         self:_publish(category, name, value)
     end
@@ -178,7 +178,7 @@ end
 
 -- Receive configured external signals.
 -- Store them under short names and never republish them.
-function FlightControl:_receive()
+function ControlSystem:_receive()
     for _, message in ipairs(self.bus:getMessages() or {}) do
         local topic = message.topic
 
@@ -223,7 +223,7 @@ function FlightControl:_receive()
     end
 end
 
-function FlightControl:_collectInputs()
+function ControlSystem:_collectInputs()
     for name, entry in pairs(self.components.input) do
         local value = entry.object:update()
 
@@ -232,7 +232,7 @@ function FlightControl:_collectInputs()
     end
 end
 
-function FlightControl:_collectSensors()
+function ControlSystem:_collectSensors()
     for name, entry in pairs(self.components.sensor) do
         local value = entry.object:update()
 
@@ -241,7 +241,7 @@ function FlightControl:_collectSensors()
     end
 end
 
-function FlightControl:_runControllers()
+function ControlSystem:_runControllers()
     for _, entry in pairs(self.components.controller) do
         local result = entry.object:update(
             self.sensors,
@@ -265,7 +265,7 @@ function FlightControl:_runControllers()
     end
 end
 
-function FlightControl:_runMixers()
+function ControlSystem:_runMixers()
     for name, entry in pairs(self.components.mixer) do
         local value = entry.object:update(self.demands)
 
@@ -279,14 +279,24 @@ function FlightControl:_runMixers()
     end
 end
 
-function FlightControl:_updateActuators()
+function ControlSystem:_updateActuators()
+    local tasks = {}
+
     for name, entry in pairs(self.components.actuator) do
-        -- Plant/actuator names correspond to output names.
-        entry.object:update(self.outputs[name])
+        local actuator = entry.object
+        local value = self.outputs[name]
+
+        tasks[#tasks + 1] = function()
+            actuator:update(value)
+        end
+    end
+
+    if #tasks > 0 then
+        parallel.waitForAll(table.unpack(tasks))
     end
 end
 
-function FlightControl:update()
+function ControlSystem:update()
     -- 1. Receive external signals and collect local inputs.
     self:_receive()
     self:_collectInputs()
@@ -304,4 +314,4 @@ function FlightControl:update()
     self:_updateActuators()
 end
 
-return FlightControl
+return ControlSystem

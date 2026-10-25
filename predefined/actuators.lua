@@ -46,7 +46,11 @@ end
 
 function Actuators.redstoneTransmission(name, peripheralName, redstoneSide)
     local function set(value)
-        peripheral.call(peripheralName, "setAnalogOutput", redstoneSide, value)
+        if (peripheralName == nil) then
+            redstone.setAnalogOutput(redstoneSide, value)
+        else
+            peripheral.call(peripheralName, "setAnalogOutput", redstoneSide, value)
+        end
     end
 end
 

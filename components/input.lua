@@ -1,8 +1,9 @@
 local Input = {}
 Input.__index = Input
 
-function Input.new(read)
+function Input.new(name, read)
     return setmetatable({
+        name = name,
         read = read,
     }, Input)
 end
