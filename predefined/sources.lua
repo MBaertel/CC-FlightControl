@@ -24,4 +24,55 @@ function Sources.timer(id)
     return source
 end
 
+function Sources.tweakedControllerAxis(id, peripheralName, axisId)
+    assert(type(id) == "string", "Controller requires an id")
+    assert(type(peripheralName) == "string", "Controller requires a peripheralName")
+    assert(type(axisId) == "number", "Axis Id must be a number")
+
+    local source = {
+        id = id,
+        role = "source"
+    }
+
+    local controller = peripheral.wrap(peripheralName)
+
+    function source:update()
+        if (not controller.hasUser()) then
+            return nil
+        end
+
+        return controller.getAxis(axisId)
+    end
+end
+
+function Sources.tweakedControllerButton(id, peripheralName, buttonId, asNumber)
+    assert(type(id) == "string", "Controller requires an id")
+    assert(type(peripheralName) == "string", "Controller requires a peripheralName")
+    assert(type(buttonId) == "number", "Button Id must be a number")
+
+    local source = {
+        id = id,
+        role = "source"
+    }
+
+    local controller = peripheral.wrap(peripheralName)
+
+    function source:update()
+        if (not controller.hasUser()) then
+            return nil
+        end
+
+        local buttonValue = controller.getButton(buttonId)
+        if (asNumber) then
+            if (buttonValue) then
+                return 1
+            else
+                return 0
+            end
+        else
+            return buttonValue
+        end
+    end
+end
+
 return Sources
