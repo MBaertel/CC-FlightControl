@@ -1,11 +1,10 @@
 local Processor = {}
 
-function Processor.new(name, process)
+function Processor.new(id, process)
     assert(type(process) == "function", "Processor requires process")
 
     return {
-        name = name,
-
+        name = id,
         update = function(self, inputs, signals, context)
             return process(inputs, signals, context)
         end,

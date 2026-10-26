@@ -1,12 +1,12 @@
 local Source = {}
 
-function Source.new(name, read)
+function Source.new(id, read)
     assert(type(read) == "function", "Source requires read")
 
     return {
-        name = name,
+        id = id,
 
-        update = function(self)
+        update = function()
             return read()
         end,
     }

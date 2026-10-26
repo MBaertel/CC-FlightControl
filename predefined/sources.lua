@@ -43,6 +43,8 @@ function Sources.tweakedControllerAxis(id, peripheralName, axisId)
 
         return controller.getAxis(axisId)
     end
+
+    return source
 end
 
 function Sources.tweakedControllerButton(id, peripheralName, buttonId, asNumber)
@@ -73,6 +75,8 @@ function Sources.tweakedControllerButton(id, peripheralName, buttonId, asNumber)
             return buttonValue
         end
     end
+
+    return source
 end
 
 return Sources
