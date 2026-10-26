@@ -1,6 +1,6 @@
-local Sources = {}
+local Inputs = {}
 
-function Sources.timer(id)
+function Inputs.timer(id)
     assert(type(id) == "string", "Timer requires an id")
 
     local source = {
@@ -24,7 +24,7 @@ function Sources.timer(id)
     return source
 end
 
-function Sources.tweakedControllerAxis(id, peripheralName, axisId)
+function Inputs.tweakedControllerAxis(id, peripheralName, axisId)
     assert(type(id) == "string", "Controller requires an id")
     assert(type(peripheralName) == "string", "Controller requires a peripheralName")
     assert(type(axisId) == "number", "Axis Id must be a number")
@@ -47,7 +47,7 @@ function Sources.tweakedControllerAxis(id, peripheralName, axisId)
     return source
 end
 
-function Sources.tweakedControllerButton(id, peripheralName, buttonId, asNumber)
+function Inputs.tweakedControllerButton(id, peripheralName, buttonId, asNumber)
     assert(type(id) == "string", "Controller requires an id")
     assert(type(peripheralName) == "string", "Controller requires a peripheralName")
     assert(type(buttonId) == "number", "Button Id must be a number")
@@ -79,4 +79,24 @@ function Sources.tweakedControllerButton(id, peripheralName, buttonId, asNumber)
     return source
 end
 
-return Sources
+function Inputs.SteeringWheel(id, peripheralName, normalized)
+    assert(type(id) == "string", "Source requires an id")
+    assert(type(peripheralName) == "string", "Source requires a peripheralName")
+    assert(type(normalized) == "boolean", "Button Id must be a number")
+
+    local source = {
+        id = id,
+        role = "source"
+    }
+
+    local steeringWheelBlock = peripheral.wrap(peripheralName)
+
+    function source:update()
+        return {
+            raw = steeringWheelBlock.getAngle(),
+            normalized = steeringWheelBlock.getNormalizedAngle()
+        }
+    end
+end
+
+return Inputs

@@ -101,7 +101,7 @@ function Actuator.redstoneReversible(id, mainRelayName, mainOutputSide, directio
     return sink
 end
 
-function Actuators.baloonBurner(id, peripheralName)
+function Actuators.balloonBurner(id, peripheralName)
     assert(type(id) == "string", "Controller requires an id")
     assert(type(peripheralName) == "string", "Actuator requires peripheralName")
 
@@ -115,7 +115,7 @@ function Actuators.baloonBurner(id, peripheralName)
     function sink:update(value)
         local normalizedValue = math.max(0, math.max(value, 1))
 
-        local maxVolume = burner.getBalloonCapacity()
+        local maxVolume = math.min(burner.getBalloonCapacity, burner.getTargetAmount())
         local outputVolume = normalizedValue * maxVolume
 
         burner.setTargetAmount(outputVolume)
