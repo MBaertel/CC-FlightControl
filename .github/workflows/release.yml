@@ -47,7 +47,7 @@ jobs:
               f.write("}\n\n")
               f.write("""
           local baseUrl =
-              "https://raw.githubusercontent.com/MBaertel/ControlScripts/"
+              "https://raw.githubusercontent.com/MBaertel/CC-FlightControl/"
               .. release .. "/"
 
           for _, path in ipairs(files) do
