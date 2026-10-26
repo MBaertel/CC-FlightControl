@@ -51,23 +51,57 @@ function Messaging.open(config)
         pendingByTopic = {},
     }
 
-    function client:publish(topic, content)
+    -- Transmit multiple signals in a single modem message.
+    function client:_publishBatch(batch)
         if self.closed then
             error("client is closed")
         end
 
-        assert(type(topic) == "string", "topic must be a string")
+        assert(type(batch) == "table", "batch must be a table")
+
+        -- Validate the complete batch before transmitting.
+        for i, item in ipairs(batch) do
+            assert(
+                type(item) == "table",
+                "batch item " .. i .. " must be a table"
+            )
+            assert(
+                type(item.topic) == "string",
+                "batch item " .. i .. " topic must be a string"
+            )
+        end
+
+        -- Avoid sending empty network messages.
+        if #batch == 0 then
+            return
+        end
 
         self.modem.transmit(
             self.channel,
             self.channel,
             {
                 _messaging = PROTOCOL_VERSION,
-                topic = topic,
                 password = self.password,
-                content = content,
+                batch = batch,
             }
         )
+    end
+
+    -- Publish one signal as a batch containing one item.
+    function client:publish(topic, content)
+        assert(type(topic) == "string", "topic must be a string")
+
+        self:_publishBatch({
+            {
+                topic = topic,
+                content = content,
+            },
+        })
+    end
+
+    -- Publish multiple signals in one modem transmission.
+    function client:publishBatch(batch)
+        self:_publishBatch(batch)
     end
 
     function client:subscribe(topic)
@@ -116,21 +150,33 @@ function Messaging.open(config)
             if receivedChannel == self.channel
                 and type(message) == "table"
                 and message._messaging == PROTOCOL_VERSION
-                and type(message.topic) == "string"
-                and self.subscriptions[message.topic]
+                and type(message.batch) == "table"
                 and (
                     self.password == nil
                     or message.password == self.password
                 ) then
-                local topic = message.topic
-                self.latest[topic] = message
+                for _, item in ipairs(message.batch) do
+                    if type(item) == "table"
+                        and type(item.topic) == "string"
+                        and self.subscriptions[item.topic] then
+                        local topic = item.topic
 
-                if not self.pendingByTopic[topic] then
-                    local entry = { topic = topic }
+                        -- Keep only the latest value for each topic.
+                        self.latest[topic] = {
+                            topic = topic,
+                            content = item.content,
+                            message = message,
+                        }
 
-                    self.pendingTail = self.pendingTail + 1
-                    self.pending[self.pendingTail] = entry
-                    self.pendingByTopic[topic] = entry
+                        -- Queue each topic only once until consumed.
+                        if not self.pendingByTopic[topic] then
+                            local entry = { topic = topic }
+
+                            self.pendingTail = self.pendingTail + 1
+                            self.pending[self.pendingTail] = entry
+                            self.pendingByTopic[topic] = entry
+                        end
+                    end
                 end
             end
         end
@@ -138,6 +184,8 @@ function Messaging.open(config)
         self.running = false
     end
 
+    -- Return pending updates as a flat list:
+    -- { { topic = "...", content = ..., message = ... }, ... }
     function client:getMessages()
         if self.closed then
             error("client is closed")
@@ -156,13 +204,13 @@ function Messaging.open(config)
             if self.pendingByTopic[topic] == entry then
                 self.pendingByTopic[topic] = nil
 
-                local message = self.latest[topic]
+                local latest = self.latest[topic]
 
-                if message then
+                if latest then
                     messages[#messages + 1] = {
-                        content = message.content,
+                        content = latest.content,
                         topic = topic,
-                        message = message,
+                        message = latest.message,
                     }
                 end
             end
