@@ -41,3 +41,5 @@ function ModulateFunctions.redstoneBipolar(value)
         return math.floor(7 + value * 8)
     end
 end
+
+return ModulateFunctions

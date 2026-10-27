@@ -128,10 +128,6 @@ function Actuators.balloonBurner(id, peripheralName)
         "Balloon burner must implement getBalloonCapacity()"
     )
     assert(
-        type(burner.getTargetAmount) == "function",
-        "Balloon burner must implement getTargetAmount()"
-    )
-    assert(
         type(burner.setTargetAmount) == "function",
         "Balloon burner must implement setTargetAmount()"
     )
@@ -144,8 +140,7 @@ function Actuators.balloonBurner(id, peripheralName)
             local normalizedValue = clamp(value, 0, 1)
 
             local capacity = burner.getBalloonCapacity()
-            local targetAmount = burner.getTargetAmount()
-            local maxVolume = math.min(capacity, targetAmount)
+            local maxVolume = math.min(capacity, 500)
 
             burner.setTargetAmount(normalizedValue * maxVolume)
         end,
