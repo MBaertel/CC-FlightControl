@@ -19,15 +19,14 @@ function Monitors.screen(id, peripheralName, label, line)
     end)
 end
 
-function Monitors.logger(id, label)
+function Monitors.logger(id)
     assert(type(id) == "string", "Monitor must have an id")
 
     local monitor = {
         id = id,
         role = "sink",
-        label = label,
 
-        update = function(value)
+        update = function(value, label)
             if (label == nil) then
                 print(value)
             else

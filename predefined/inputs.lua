@@ -52,7 +52,7 @@ function Inputs.tweakedControllerAxis(id, peripheralName, axisId)
 
     function source:update()
         if not controller.hasUser() then
-            return nil
+            return 0
         end
 
         return controller.getAxis(axisId)
@@ -93,7 +93,7 @@ function Inputs.tweakedControllerButton(
 
     function source:update()
         if not controller.hasUser() then
-            return nil
+            return false
         end
 
         local buttonValue = controller.getButton(buttonId)

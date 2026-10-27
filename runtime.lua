@@ -9,6 +9,12 @@ local ROLES = {
     sink = true,
 }
 
+local EXECUTION_POLICIES = {
+    on_change = true,
+    always = true,
+    on_start = true,
+}
+
 local unpackValues = table.unpack or unpack
 
 local function valuesEqual(a, b)
@@ -75,6 +81,19 @@ local function bindingList(bindings)
     return result
 end
 
+local function getExecutionPolicy(node)
+    local config = node.config or {}
+    local execution =
+        config.execution or node.execution or "on_change"
+
+    assert(
+        EXECUTION_POLICIES[execution],
+        "Invalid execution policy: " .. tostring(execution)
+    )
+
+    return execution
+end
+
 function Runtime.new(config)
     assert(type(config) == "table", "Runtime requires config")
 
@@ -82,15 +101,20 @@ function Runtime.new(config)
 
     assert(type(definition) == "table", "Runtime requires a definition")
     assert(type(definition.flow) == "table", "Definition requires a flow")
-    assert(type(definition.flow.stages) == "table",
-        "Flow requires stages")
-    assert(type(definition.components) == "table",
-        "Definition requires components")
+    assert(
+        type(definition.flow.stages) == "table",
+        "Flow requires stages"
+    )
+    assert(
+        type(definition.components) == "table",
+        "Definition requires components"
+    )
 
     local self = setmetatable({}, Runtime)
 
     self.id = config.id or definition.id or "flight-runtime"
     self.interval = config.interval or 0.05
+
     assert(
         type(self.interval) == "number" and self.interval > 0,
         "Runtime interval must be a positive number"
@@ -133,10 +157,14 @@ function Runtime.new(config)
 
     -- Validate nodes and discover local producers and dependencies.
     for stageIndex, stage in ipairs(self.flow.stages) do
-        assert(type(stage) == "table",
-            "Stage " .. stageIndex .. " must be a table")
-        assert(type(stage.components) == "table",
-            "Stage " .. stageIndex .. " requires components")
+        assert(
+            type(stage) == "table",
+            "Stage " .. stageIndex .. " must be a table"
+        )
+        assert(
+            type(stage.components) == "table",
+            "Stage " .. stageIndex .. " requires components"
+        )
 
         for nodeIndex, node in ipairs(stage.components) do
             local label = "Stage " .. stageIndex
@@ -144,6 +172,14 @@ function Runtime.new(config)
 
             assert(type(node) == "table", label .. " must be a table")
             assert(ROLES[node.role], label .. " has an invalid role")
+
+            assert(
+                node.config == nil or type(node.config) == "table",
+                label .. " config must be a table"
+            )
+
+            node.execution = getExecutionPolicy(node)
+            node.started = false
 
             if node.remote then
                 assert(
@@ -238,7 +274,7 @@ function Runtime.new(config)
                     self.localOutputs[node.output] = true
                 end
 
-                -- Collect the underlying signal names, not accessors.
+                -- Collect underlying signal names, not accessors.
                 if node.role ~= "source" then
                     for _, binding in ipairs(node.inputs) do
                         self.neededSignals[binding.signal] = true
@@ -320,9 +356,8 @@ function Runtime:_publishBatch(batch)
     self.bus:publishBatch(batch)
 end
 
--- Resolve bindings into a positional argument list.
--- Return an explicit argument count so nil optional arguments
--- do not shift or truncate later arguments.
+-- Resolve bindings into positional arguments.
+-- Explicit count preserves optional nil arguments.
 function Runtime:_resolveInputs(bindings)
     local args = {}
     local count = 0
@@ -360,7 +395,7 @@ end
 
 function Runtime:_setSignal(signal, value, changed, outgoing)
     if value == nil then
-        -- A nil output means no update. Retain the cached value.
+        -- Nil means no update; retain the cached value.
         return
     end
 
@@ -373,7 +408,7 @@ function Runtime:_setSignal(signal, value, changed, outgoing)
     self.signals[signal] = value
     changed[signal] = true
 
-    -- Only explicitly declared remote sink signals are published.
+    -- Publish only explicitly configured remote sink signals.
     if self.publishSignals[signal] then
         outgoing[signal] = {
             topic = signal,
@@ -391,19 +426,35 @@ function Runtime:_executeNode(node, changed)
 
     assert(
         component and type(component.update) == "function",
-        "Component " .. tostring(node.component)
-        .. " requires update()"
+        "Component " .. tostring(node.component) .. " requires update()"
     )
 
+    local policy = node.execution
+
+    -- Sources have no inputs to trigger execution.
+    -- on_change and always poll every tick.
+    -- on_start polls only once.
     if node.role == "source" then
+        if policy == "on_start" and node.started then
+            return nil
+        end
+
         return {
+            node = node,
             signal = node.output,
             value = component:update(),
         }
     end
 
-    -- Every node in this stage sees the same pre-stage change set.
-    if not self:_inputsChanged(node.inputs, changed) then
+    local inputsChanged = self:_inputsChanged(node.inputs, changed)
+
+    -- on_start means initial execution followed by on_change behavior.
+    local shouldRun =
+        policy == "always"
+        or inputsChanged
+        or (policy == "on_start" and not node.started)
+
+    if not shouldRun then
         return nil
     end
 
@@ -415,17 +466,22 @@ function Runtime:_executeNode(node, changed)
 
     if node.role == "processor" then
         return {
+            node = node,
             signal = node.output,
             value = component:update(unpackValues(args, 1, count)),
         }
     end
 
     component:update(unpackValues(args, 1, count))
-    return nil
+
+    return {
+        node = node,
+        executed = true,
+    }
 end
 
 function Runtime:update()
-    -- Apply the full incoming network batch before evaluating stages.
+    -- Apply the complete incoming network batch before evaluating stages.
     local received = self:_receiveBatch()
     local changed = {}
     local outgoing = {}
@@ -457,23 +513,28 @@ function Runtime:update()
                 end
             end
 
-            -- Wait for every node in this stage, including any that yield
-            -- while waiting for game-tick-dependent work.
+            -- All nodes finish before outputs are committed.
             parallel.waitForAll(unpackValues(tasks))
         end
 
         -- Commit outputs only after every node in the stage has completed.
-        -- Thus, nodes in the same stage cannot consume each other's outputs.
         for index = 1, #nodes do
             local result = results[index]
 
             if result then
-                self:_setSignal(
-                    result.signal,
-                    result.value,
-                    changed,
-                    outgoing
-                )
+                -- Mark started only after actual execution.
+                if result.node then
+                    result.node.started = true
+                end
+
+                if result.signal then
+                    self:_setSignal(
+                        result.signal,
+                        result.value,
+                        changed,
+                        outgoing
+                    )
+                end
             end
         end
     end

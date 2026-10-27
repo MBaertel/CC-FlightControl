@@ -1,12 +1,43 @@
 local Builder = {}
 Builder.__index = Builder
 
+local EXECUTION_POLICIES = {
+    on_change = true,
+    always = true,
+    on_start = true,
+}
+
 -- Component validation
 
 local function isComponent(value)
     return type(value) == "table"
         and type(value.id) == "string"
         and type(value.update) == "function"
+end
+
+-- Normalize node configuration.
+
+local function normalizeConfig(config, label)
+    if config == nil then
+        config = {}
+    end
+
+    assert(
+        type(config) == "table",
+        label .. ": config must be a table"
+    )
+
+    local execution = config.execution or "on_change"
+
+    assert(
+        EXECUTION_POLICIES[execution],
+        label .. ": invalid execution policy: "
+        .. tostring(execution)
+    )
+
+    return {
+        execution = execution,
+    }
 end
 
 -- Parse a signal binding.
@@ -83,6 +114,7 @@ local function isArray(value)
         end
 
         count = count + 1
+
         if key > maxIndex then
             maxIndex = key
         end
@@ -92,16 +124,6 @@ local function isArray(value)
 end
 
 -- Normalize component inputs into an ordered array.
---
--- String:
---   "sensor/altitude"
---
--- Positional:
---   { "sensor/altitude", "sensor/velocity" }
---
--- Named:
---   { altitude = "sensor/altitude", velocity = "sensor/velocity" }
---   Requires component.args = { "altitude", "velocity" }
 
 local function normalizeInputs(component, inputs, label)
     if type(inputs) == "string" then
@@ -173,7 +195,6 @@ local function normalizeInputs(component, inputs, label)
 end
 
 -- Normalize remote publication bindings.
--- Unlike component bindings, remote sinks do not need component.args.
 -- Named keys are sorted to ensure deterministic order.
 
 local function normalizeRemoteInputs(inputs)
@@ -206,6 +227,7 @@ local function normalizeRemoteInputs(inputs)
             type(name) == "string",
             "Remote sink named binding keys must be strings"
         )
+
         table.insert(names, name)
     end
 
@@ -293,10 +315,11 @@ function Builder:_nextNodeId()
     return id
 end
 
-function Builder:_addNode(component, role, inputs, output)
+function Builder:_addNode(component, role, inputs, output, config)
     self:_ensureStage()
 
     local componentId = self:_registerComponent(component)
+    local normalizedConfig = normalizeConfig(config, role)
 
     local node = {
         id = self:_nextNodeId(),
@@ -304,6 +327,7 @@ function Builder:_addNode(component, role, inputs, output)
         role = role,
         inputs = inputs,
         output = output,
+        config = normalizedConfig,
     }
 
     table.insert(self.currentStage.components, node)
@@ -314,12 +338,13 @@ end
 -- Sources
 --
 -- Local:
---   builder:source(sensor, "sensor/altitude")
+--   builder:source(sensor, nil, "sensor/altitude", config)
+--   builder:source(sensor, "sensor/altitude", config)
 --
 -- Remote:
---   builder:source("sensor/altitude")
+--   builder:source("sensor/altitude", config)
 
-function Builder:_addRemoteSource(signal)
+function Builder:_addRemoteSource(signal, config)
     local binding = parseBinding(signal, "Remote source")
 
     assert(
@@ -336,6 +361,7 @@ function Builder:_addRemoteSource(signal)
         role = "source",
         output = binding.signal,
         remote = true,
+        config = normalizeConfig(config, "Remote source"),
     }
 
     table.insert(self.currentStage.components, node)
@@ -343,14 +369,41 @@ function Builder:_addRemoteSource(signal)
     return self
 end
 
-function Builder:source(componentOrSignal, output)
-    if type(componentOrSignal) == "string" and output == nil then
-        return self:_addRemoteSource(componentOrSignal)
+function Builder:source(componentOrSignal, inputs, output, config)
+    if type(componentOrSignal) == "string" then
+        -- Remote source: source(signal [, config])
+        assert(
+            output == nil,
+            "Remote source accepts a signal and optional config"
+        )
+
+        if inputs ~= nil then
+            assert(
+                type(inputs) == "table",
+                "Remote source config must be a table"
+            )
+            config = inputs
+        end
+
+        return self:_addRemoteSource(componentOrSignal, config)
     end
 
     assert(
         isComponent(componentOrSignal),
         "Local source requires a component instance"
+    )
+
+    -- Support source(component, output, config) as a convenience form.
+    if type(inputs) == "string" and type(output) == "table"
+        and config == nil then
+        config = output
+        output = inputs
+        inputs = nil
+    end
+
+    assert(
+        inputs == nil,
+        "Source cannot have inputs"
     )
 
     assert(
@@ -369,17 +422,16 @@ function Builder:source(componentOrSignal, output)
         componentOrSignal,
         "source",
         nil,
-        binding.signal
+        binding.signal,
+        config
     )
 end
 
 -- Processors
 --
--- builder:processor(instance, "sensor/altitude", "demand/altitude")
--- builder:processor(instance, {"sensor/altitude", "sensor/velocity"}, output)
--- builder:processor(instance, { altitude = "...", velocity = "..." }, output)
+-- builder:processor(component, inputs, output [, config])
 
-function Builder:processor(component, inputs, output)
+function Builder:processor(component, inputs, output, config)
     assert(
         isComponent(component),
         "Processor requires a component instance"
@@ -407,23 +459,21 @@ function Builder:processor(component, inputs, output)
         component,
         "processor",
         normalized,
-        outputBinding.signal
+        outputBinding.signal,
+        config
     )
 end
 
 -- Sinks
 --
 -- Local:
---   builder:sink(propeller, "demand/forward")
---   builder:sink(pid, "sensor/altitude.raw", "input/forward.normalized")
---   builder:sink(controller, { altitude = "...", velocity = "..." })
+--   builder:sink(component, inputs [, config])
+--   builder:sink(component, input1, input2, ... [, config])
 --
 -- Remote:
---   builder:sink("demand/forward")
---   builder:sink({"demand/altitude", "demand/pitch"})
---   builder:sink({front = "demand/propellers.frontUp", back = "demand/propellers.backUp"})
+--   builder:sink(signalOrBindings [, config])
 
-function Builder:_addRemoteSink(inputs)
+function Builder:_addRemoteSink(inputs, config)
     local normalized = normalizeRemoteInputs(inputs)
 
     self:_ensureStage()
@@ -435,6 +485,7 @@ function Builder:_addRemoteSink(inputs)
         inputs = normalized,
         remote = true,
         publish = true,
+        config = normalizeConfig(config, "Remote sink"),
     }
 
     table.insert(self.currentStage.components, node)
@@ -443,28 +494,50 @@ function Builder:_addRemoteSink(inputs)
 end
 
 function Builder:sink(componentOrInputs, ...)
+    local count = select("#", ...)
+    local args = { ... }
+
     if not isComponent(componentOrInputs) then
         assert(
-            select("#", ...) == 0,
-            "Remote sink accepts one binding argument"
+            count <= 1,
+            "Remote sink accepts bindings and optional config"
         )
 
-        return self:_addRemoteSink(componentOrInputs)
-    end
+        local config
 
-    local count = select("#", ...)
+        if count == 1 then
+            config = args[1]
+            assert(
+                config == nil or type(config) == "table",
+                "Remote sink config must be a table"
+            )
+        end
+
+        return self:_addRemoteSink(componentOrInputs, config)
+    end
 
     assert(count > 0, "Local sink requires at least one input")
 
+    local config
     local inputs
 
+    -- A trailing config table is recognized by its execution field.
+    -- This preserves named input tables and positional input bindings.
+    if count >= 2
+        and type(args[count]) == "table"
+        and args[count].execution ~= nil then
+        config = args[count]
+        args[count] = nil
+        count = count - 1
+    end
+
     if count == 1 then
-        inputs = select(1, ...)
+        inputs = args[1]
     else
         inputs = {}
 
         for i = 1, count do
-            inputs[i] = select(i, ...)
+            inputs[i] = args[i]
         end
     end
 
@@ -478,7 +551,8 @@ function Builder:sink(componentOrInputs, ...)
         componentOrInputs,
         "sink",
         normalized,
-        nil
+        nil,
+        config
     )
 end
 
