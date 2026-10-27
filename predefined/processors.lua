@@ -1,10 +1,22 @@
 local Processors = {}
 
+local Validation = require("utils.validation")
+local assertString = Validation.assertString
+
 function Processors.PID(id, kp, ki, kd, minOutput, maxOutput)
-    assert(type(id) == "string", "PID requires an id")
+    assertString(id, "PID requires an id")
+    assert(type(kp) == "number", "PID kp must be a number")
+    assert(type(ki) == "number", "PID ki must be a number")
+    assert(type(kd) == "number", "PID kd must be a number")
 
     minOutput = minOutput or -1
     maxOutput = maxOutput or 1
+
+    assert(
+        type(minOutput) == "number" and type(maxOutput) == "number",
+        "PID output limits must be numbers"
+    )
+    assert(minOutput <= maxOutput, "PID minimum output exceeds maximum")
 
     local integral = 0
     local previousError = nil
@@ -12,29 +24,26 @@ function Processors.PID(id, kp, ki, kd, minOutput, maxOutput)
     local processor = {
         id = id,
         role = "processor",
+        args = { "target", "measured", "dt" },
     }
 
-    function processor:update(inputs)
-        local target = inputs.target
-        local measured = inputs.measured
-        local dt = inputs.dt
-
+    function processor:update(target, measured, dt)
         if target == nil or measured == nil
             or dt == nil or dt <= 0 then
             return nil
         end
 
-        local error = target - measured
-        integral = integral + error * dt
+        local errorValue = target - measured
+        integral = integral + errorValue * dt
 
         local derivative = 0
         if previousError ~= nil then
-            derivative = (error - previousError) / dt
+            derivative = (errorValue - previousError) / dt
         end
 
-        previousError = error
+        previousError = errorValue
 
-        local output = kp * error
+        local output = kp * errorValue
             + ki * integral
             + kd * derivative
 
@@ -48,7 +57,7 @@ function Processors.PID(id, kp, ki, kd, minOutput, maxOutput)
 end
 
 function Processors.Delay(id, delaySeconds)
-    assert(type(id) == "string", "Delay requires an id")
+    assertString(id, "Delay requires an id")
     assert(
         type(delaySeconds) == "number" and delaySeconds >= 0,
         "Delay requires a non-negative delay in seconds"
@@ -57,22 +66,15 @@ function Processors.Delay(id, delaySeconds)
     local processor = {
         id = id,
         role = "processor",
+        args = { "value" },
         delaySeconds = delaySeconds,
         lastRun = nil,
     }
 
-    function processor:update(inputs)
-        assert(type(inputs) == "table", "Delay inputs must be a table")
-
-        local value
-        local count = 0
-
-        for _, input in pairs(inputs) do
-            count = count + 1
-            value = input
+    function processor:update(value)
+        if value == nil then
+            return nil
         end
-
-        assert(count == 1, "Delay requires exactly one input")
 
         local now = os.epoch("utc") / 1000
 
@@ -85,7 +87,6 @@ function Processors.Delay(id, delaySeconds)
             return nil
         end
 
-        -- The delay elapsed; allow this output and restart the timer.
         self.lastRun = now
         return value
     end
@@ -94,47 +95,47 @@ function Processors.Delay(id, delaySeconds)
 end
 
 function Processors.Selector(id, expectedValue)
-    assert(type(id) == "string", "Selector requires an id")
+    assertString(id, "Selector requires an id")
 
     local processor = {
         id = id,
         role = "processor",
+        args = { "select", "value" },
         expectedValue = expectedValue,
     }
 
-    function processor:update(inputs)
-        assert(type(inputs) == "table", "Selector inputs must be a table")
-
-        if inputs.select ~= self.expectedValue then
+    function processor:update(selectValue, value)
+        if selectValue ~= self.expectedValue then
             return nil
         end
 
-        return inputs.value
+        return value
     end
 
     return processor
 end
 
 function Processors.Latch(id, initialValue, alternateValue)
-    assert(type(id) == "string", "Latch requires an id")
+    assertString(id, "Latch requires an id")
     assert(initialValue ~= nil, "Latch requires an initial value")
     assert(alternateValue ~= nil, "Latch requires an alternate value")
-    assert(initialValue ~= alternateValue,
-        "Latch states must be different")
+    assert(
+        initialValue ~= alternateValue,
+        "Latch states must be different"
+    )
 
     local processor = {
         id = id,
         role = "processor",
+        args = { "trigger" },
         state = initialValue,
         previousTrigger = false,
     }
 
-    function processor:update(inputs)
-        assert(type(inputs) == "table", "Latch inputs must be a table")
+    function processor:update(trigger)
+        trigger = trigger == true
 
-        local trigger = inputs.trigger == true
         local risingEdge = trigger and not self.previousTrigger
-
         self.previousTrigger = trigger
 
         if not risingEdge then
@@ -148,6 +149,34 @@ function Processors.Latch(id, initialValue, alternateValue)
         end
 
         return self.state
+    end
+
+    return processor
+end
+
+function Processors.hold(id, initialValue)
+    assertString(id, "Hold requires an id")
+
+    if initialValue == nil then
+        initialValue = 0
+    end
+
+    assert(type(initialValue) == "number", "Hold initial value must be a number")
+
+    local processor = {
+        id = id,
+        role = "processor",
+        args = { "value" },
+        current = initialValue,
+    }
+
+    function processor:update(value)
+        if type(value) ~= "number" then
+            return nil
+        end
+
+        self.current = self.current + value
+        return self.current
     end
 
     return processor

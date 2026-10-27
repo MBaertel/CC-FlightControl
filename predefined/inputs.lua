@@ -1,7 +1,12 @@
 local Inputs = {}
 
+local Validation = require("utils.validation")
+
+local assertString = Validation.assertString
+local wrapPeripheral = Validation.wrapPeripheral
+
 function Inputs.timer(id)
-    assert(type(id) == "string", "Timer requires an id")
+    assertString(id, "Timer requires an id")
 
     local source = {
         id = id,
@@ -11,8 +16,8 @@ function Inputs.timer(id)
 
     function source:update()
         local now = os.epoch("utc") / 1000
-
         local delta = 0
+
         if self.lastTime ~= nil then
             delta = now - self.lastTime
         end
@@ -25,19 +30,28 @@ function Inputs.timer(id)
 end
 
 function Inputs.tweakedControllerAxis(id, peripheralName, axisId)
-    assert(type(id) == "string", "Controller requires an id")
-    assert(type(peripheralName) == "string", "Controller requires a peripheralName")
-    assert(type(axisId) == "number", "Axis Id must be a number")
+    assertString(id, "Controller requires an id")
+    assertString(peripheralName, "Controller requires a peripheral name")
+    assert(type(axisId) == "number", "Axis ID must be a number")
+
+    local controller = wrapPeripheral(peripheralName)
+
+    assert(
+        type(controller.hasUser) == "function",
+        "Controller must implement hasUser()"
+    )
+    assert(
+        type(controller.getAxis) == "function",
+        "Controller must implement getAxis()"
+    )
 
     local source = {
         id = id,
-        role = "source"
+        role = "source",
     }
 
-    local controller = peripheral.wrap(peripheralName)
-
     function source:update()
-        if (not controller.hasUser()) then
+        if not controller.hasUser() then
             return nil
         end
 
@@ -47,56 +61,96 @@ function Inputs.tweakedControllerAxis(id, peripheralName, axisId)
     return source
 end
 
-function Inputs.tweakedControllerButton(id, peripheralName, buttonId, asNumber)
-    assert(type(id) == "string", "Controller requires an id")
-    assert(type(peripheralName) == "string", "Controller requires a peripheralName")
-    assert(type(buttonId) == "number", "Button Id must be a number")
+function Inputs.tweakedControllerButton(
+    id,
+    peripheralName,
+    buttonId,
+    asNumber
+)
+    assertString(id, "Controller requires an id")
+    assertString(peripheralName, "Controller requires a peripheral name")
+    assert(type(buttonId) == "number", "Button ID must be a number")
+    assert(
+        asNumber == nil or type(asNumber) == "boolean",
+        "asNumber must be a boolean or nil"
+    )
+
+    local controller = wrapPeripheral(peripheralName)
+
+    assert(
+        type(controller.hasUser) == "function",
+        "Controller must implement hasUser()"
+    )
+    assert(
+        type(controller.getButton) == "function",
+        "Controller must implement getButton()"
+    )
 
     local source = {
         id = id,
-        role = "source"
+        role = "source",
     }
 
-    local controller = peripheral.wrap(peripheralName)
-
     function source:update()
-        if (not controller.hasUser()) then
+        if not controller.hasUser() then
             return nil
         end
 
         local buttonValue = controller.getButton(buttonId)
-        if (asNumber) then
-            if (buttonValue) then
-                return 1
-            else
-                return 0
-            end
-        else
-            return buttonValue
+
+        if asNumber then
+            return buttonValue and 1 or 0
         end
+
+        return buttonValue
     end
 
     return source
 end
 
-function Inputs.SteeringWheel(id, peripheralName, normalized)
-    assert(type(id) == "string", "Source requires an id")
-    assert(type(peripheralName) == "string", "Source requires a peripheralName")
-    assert(type(normalized) == "boolean", "Button Id must be a number")
+function Inputs.steeringWheel(id, peripheralName, normalized)
+    assertString(id, "Source requires an id")
+    assertString(peripheralName, "Source requires a peripheral name")
+    assert(
+        normalized == nil or type(normalized) == "boolean",
+        "normalized must be a boolean or nil"
+    )
+
+    local steeringWheel = wrapPeripheral(peripheralName)
+
+    assert(
+        type(steeringWheel.getAngle) == "function",
+        "Steering wheel must implement getAngle()"
+    )
+    assert(
+        type(steeringWheel.getNormalizedAngle) == "function",
+        "Steering wheel must implement getNormalizedAngle()"
+    )
 
     local source = {
         id = id,
-        role = "source"
+        role = "source",
     }
 
-    local steeringWheelBlock = peripheral.wrap(peripheralName)
-
     function source:update()
-        return {
-            raw = steeringWheelBlock.getAngle(),
-            normalized = steeringWheelBlock.getNormalizedAngle()
-        }
+        if normalized == nil then
+            return {
+                raw = steeringWheel.getAngle(),
+                normalized = steeringWheel.getNormalizedAngle(),
+            }
+        end
+
+        if normalized then
+            return steeringWheel.getNormalizedAngle()
+        end
+
+        return steeringWheel.getAngle()
     end
+
+    return source
 end
+
+-- Preserve compatibility with existing callers.
+Inputs.SteeringWheel = Inputs.steeringWheel
 
 return Inputs

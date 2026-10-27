@@ -1,127 +1,155 @@
 local Actuators = {}
 
 local modulateFunctions = require("predefined.modulateFunctions")
+local Validation = require("utils.validation")
 
-function Actuator.redstoneUnipolar(id, relayName, outputSide)
-    assert(type(id) == "string", "Controller requires an id")
-    assert(type(relayName) == "string", "Actuator requires peripheralName")
-    assert(type(outputSide) == "string", "Output side must be a string")
+local assertString = Validation.assertString
+local wrapPeripheral = Validation.wrapPeripheral
 
-    local sink = {
-        id = id,
-        role = "sink"
-    }
-
-    local peripheral
-    if (relayName ~= nil) then
-        peripheral = peripheral.wrap(relayName)
-    end
-
-    function sink:update(value)
-        local normalizedValue = math.max(0, math.min(value, 1))
-        local outputValue = normalizedValue * 15
-
-        if (peripheral == nil) then
-            redstone.setAnalogOutput(outputSide)
-        else
-            peripheral.setAnalogOutput(outputSide)
-        end
-    end
-
-    return sink
+local function clamp(value, minimum, maximum)
+    assert(type(value) == "number", "Actuator input must be a number")
+    return math.max(minimum, math.min(value, maximum))
 end
 
-function Actuator.redstoneBipolar(id, relayName, outputSide)
-    assert(type(id) == "string", "Controller requires an id")
-    assert(type(relayName) == "string", "Actuator requires peripheralName")
-    assert(type(outputSide) == "string", "Output side must be a string")
-
-    local sink = {
-        id = id,
-        role = "sink"
-    }
-
-    local peripheral
-    if (relayName ~= nil) then
-        peripheral = peripheral.wrap(relayName)
+local function setAnalog(relay, side, value)
+    if relay then
+        relay.setAnalogOutput(side, value)
+    else
+        redstone.setAnalogOutput(side, value)
     end
-
-    function sink:update(value)
-        local normalizedValue = math.max(-1, math.min(value, 1))
-        local outputValue = modulateFunctions.redstoneBipolar(normalizedValue)
-
-        if (peripheral == nil) then
-            redstone.setAnalogOutput(outputSide)
-        else
-            peripheral.setAnalogOutput(outputSide)
-        end
-    end
-
-    return sink
 end
 
-function Actuator.redstoneReversible(id, mainRelayName, mainOutputSide, directionRelayName, directionOutputSide)
-    assert(type(id) == "string", "Controller requires an id")
-    assert(type(mainRelayName) == "string", "Actuator requires peripheralName for the main relay")
-    assert(type(mainOutputSide) == "string", "Output side must be a string")
-    assert(type(directionRelayName) == "string", "Actuator requires peripheralName for the direction relay")
-    assert(type(directionOutputSide) == "string", "Output side must be a string")
+local function setDigital(relay, side, value)
+    if relay then
+        relay.setOutput(side, value)
+    else
+        redstone.setOutput(side, value)
+    end
+end
 
-    local sink = {
+function Actuators.redstoneUnipolar(id, relayName, outputSide)
+    assertString(id, "Actuator requires an id")
+    assert(
+        relayName == nil or type(relayName) == "string",
+        "Relay name must be a string or nil"
+    )
+    assertString(outputSide, "Output side must be a string")
+
+    local relay = relayName and wrapPeripheral(relayName) or nil
+
+    return {
         id = id,
-        role = "sink"
+        role = "sink",
+
+        update = function(_, value)
+            local normalizedValue = clamp(value, 0, 1)
+            setAnalog(relay, outputSide, normalizedValue * 15)
+        end,
     }
+end
 
-    local mainRelay
-    if (mainRelayName ~= nil) then
-        peripheral = peripheral.wrap(mainRelayName)
-    end
-    local directionRelay
-    if (directionRelayName ~= nil) then
-        peripheral = peripheral.wrap(directionRelayName)
-    end
+function Actuators.redstoneBipolar(id, relayName, outputSide)
+    assertString(id, "Actuator requires an id")
+    assert(
+        relayName == nil or type(relayName) == "string",
+        "Relay name must be a string or nil"
+    )
+    assertString(outputSide, "Output side must be a string")
 
-    function sink:update(value)
-        function sink:update(value)
-            local normalizedValue = math.max(-1, math.min(value, 1))
-            local outputValue = modulateFunctions.redstoneUnipolar(math.abs(normalizedValue))
+    local relay = relayName and wrapPeripheral(relayName) or nil
 
-            if (directionRelay ~= nil) then
-                directionRelay.setOutput(directionOutputSide, normalizedValue < 0)
-            end
+    return {
+        id = id,
+        role = "sink",
 
-            if (peripheral == nil) then
-                redstone.setAnalogOutput(outputSide)
-            else
-                peripheral.setAnalogOutput(outputSide)
-            end
-        end
-    end
+        update = function(_, value)
+            local normalizedValue = clamp(value, -1, 1)
+            local outputValue =
+                modulateFunctions.redstoneBipolar(normalizedValue)
 
-    return sink
+            setAnalog(relay, outputSide, outputValue)
+        end,
+    }
+end
+
+function Actuators.redstoneReversible(
+    id,
+    mainRelayName,
+    mainOutputSide,
+    directionRelayName,
+    directionOutputSide
+)
+    assertString(id, "Actuator requires an id")
+    assertString(
+        mainRelayName,
+        "Actuator requires a main relay name"
+    )
+    assertString(mainOutputSide, "Main output side must be a string")
+    assertString(
+        directionRelayName,
+        "Actuator requires a direction relay name"
+    )
+    assertString(
+        directionOutputSide,
+        "Direction output side must be a string"
+    )
+
+    local mainRelay = wrapPeripheral(mainRelayName)
+    local directionRelay = wrapPeripheral(directionRelayName)
+
+    return {
+        id = id,
+        role = "sink",
+
+        update = function(_, value)
+            local normalizedValue = clamp(value, -1, 1)
+            local outputValue =
+                modulateFunctions.redstoneUnipolar(math.abs(normalizedValue))
+
+            setDigital(
+                directionRelay,
+                directionOutputSide,
+                normalizedValue < 0
+            )
+
+            setAnalog(mainRelay, mainOutputSide, outputValue)
+        end,
+    }
 end
 
 function Actuators.balloonBurner(id, peripheralName)
-    assert(type(id) == "string", "Controller requires an id")
-    assert(type(peripheralName) == "string", "Actuator requires peripheralName")
+    assertString(id, "Actuator requires an id")
+    assertString(peripheralName, "Actuator requires a peripheral name")
 
-    local sink = {
+    local burner = wrapPeripheral(peripheralName)
+
+    assert(
+        type(burner.getBalloonCapacity) == "function",
+        "Balloon burner must implement getBalloonCapacity()"
+    )
+    assert(
+        type(burner.getTargetAmount) == "function",
+        "Balloon burner must implement getTargetAmount()"
+    )
+    assert(
+        type(burner.setTargetAmount) == "function",
+        "Balloon burner must implement setTargetAmount()"
+    )
+
+    return {
         id = id,
-        role = "sink"
+        role = "sink",
+
+        update = function(_, value)
+            local normalizedValue = clamp(value, 0, 1)
+
+            local capacity = burner.getBalloonCapacity()
+            local targetAmount = burner.getTargetAmount()
+            local maxVolume = math.min(capacity, targetAmount)
+
+            burner.setTargetAmount(normalizedValue * maxVolume)
+        end,
     }
-
-    local burner = peripheral.wrap(peripheralName)
-
-    function sink:update(value)
-        local normalizedValue = math.max(0, math.max(value, 1))
-
-        local maxVolume = math.min(burner.getBalloonCapacity, burner.getTargetAmount())
-        local outputVolume = normalizedValue * maxVolume
-
-        burner.setTargetAmount(outputVolume)
-    end
-
-    return sink
 end
 
 return Actuators

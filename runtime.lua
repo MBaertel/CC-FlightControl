@@ -9,22 +9,70 @@ local ROLES = {
     sink = true,
 }
 
+local unpackValues = table.unpack or unpack
+
+local function valuesEqual(a, b)
+    return a == b
+end
+
 local function resolveBinding(binding)
     if type(binding) == "string" then
-        return binding, false
+        return {
+            signal = binding,
+            accessor = nil,
+            optional = false,
+        }
     end
 
     assert(
         type(binding) == "table"
-        and type(binding.signal) == "string",
-        "Input binding must be a signal name or binding table"
+        and type(binding.signal) == "string"
+        and binding.signal ~= "",
+        "Input binding requires a signal name"
     )
 
-    return binding.signal, binding.optional == true
+    assert(
+        binding.accessor == nil
+        or (
+            type(binding.accessor) == "string"
+            and binding.accessor ~= ""
+        ),
+        "Input binding accessor must be a non-empty string"
+    )
+
+    return {
+        signal = binding.signal,
+        accessor = binding.accessor,
+        optional = binding.optional == true,
+    }
 end
 
-local function valuesEqual(a, b)
-    return a == b
+-- Read a dotted field path from a signal value.
+-- Example: accessor "raw.value" reads value.raw.value.
+local function resolveAccessor(value, accessor)
+    if accessor == nil then
+        return value
+    end
+
+    for key in accessor:gmatch("[^%.]+") do
+        if type(value) ~= "table" then
+            return nil
+        end
+
+        value = value[key]
+    end
+
+    return value
+end
+
+local function bindingList(bindings)
+    local result = {}
+
+    for _, binding in ipairs(bindings or {}) do
+        result[#result + 1] = resolveBinding(binding)
+    end
+
+    return result
 end
 
 function Runtime.new(config)
@@ -43,10 +91,15 @@ function Runtime.new(config)
 
     self.id = config.id or definition.id or "flight-runtime"
     self.interval = config.interval or 0.05
-    self.flow = definition.flow
+    assert(
+        type(self.interval) == "number" and self.interval > 0,
+        "Runtime interval must be a positive number"
+    )
 
+    self.flow = definition.flow
     self.components = {}
     self.signals = {}
+
     self.neededSignals = {}
     self.localOutputs = {}
     self.remoteSignals = {}
@@ -56,19 +109,29 @@ function Runtime.new(config)
     self.bus = nil
     self.running = false
 
-    -- Register local component instances by their own IDs.
+    -- Register local component instances by ID.
     for id, component in pairs(definition.components) do
-        assert(type(id) == "string", "Component registry keys must be strings")
-        assert(type(component) == "table", "Invalid component: " .. id)
-        assert(component.id == id,
-            "Component registry key does not match component id: " .. id)
-        assert(type(component.update) == "function",
-            "Component " .. id .. " requires update()")
+        assert(
+            type(id) == "string",
+            "Component registry keys must be strings"
+        )
+        assert(
+            type(component) == "table",
+            "Invalid component: " .. id
+        )
+        assert(
+            component.id == id,
+            "Component registry key does not match component id: " .. id
+        )
+        assert(
+            type(component.update) == "function",
+            "Component " .. id .. " requires update()"
+        )
 
         self.components[id] = component
     end
 
-    -- Pass 1: validate nodes, find local outputs, and collect dependencies.
+    -- Validate nodes and discover local producers and dependencies.
     for stageIndex, stage in ipairs(self.flow.stages) do
         assert(type(stage) == "table",
             "Stage " .. stageIndex .. " must be a table")
@@ -80,82 +143,112 @@ function Runtime.new(config)
                 .. ", node " .. nodeIndex
 
             assert(type(node) == "table", label .. " must be a table")
-            assert(
-                node.role == "source"
-                or node.role == "processor"
-                or node.role == "sink",
-                label .. " has an invalid role"
-            )
+            assert(ROLES[node.role], label .. " has an invalid role")
 
             if node.remote then
-                assert(node.component == nil,
-                    label .. " remote nodes cannot have components")
+                assert(
+                    node.component == nil,
+                    label .. " remote nodes cannot have components"
+                )
 
                 if node.role == "source" then
-                    assert(type(node.output) == "string",
-                        label .. " remote source requires an output signal")
+                    assert(
+                        type(node.output) == "string",
+                        label .. " remote source requires an output signal"
+                    )
 
                     self.explicitRemoteSignals[node.output] = true
                 elseif node.role == "sink" then
-                    assert(node.publish == true,
-                        label .. " remote sink must publish")
-                    assert(type(node.inputs) == "table",
-                        label .. " remote sink requires inputs")
+                    assert(
+                        node.publish == true,
+                        label .. " remote sink must publish"
+                    )
+                    assert(
+                        type(node.inputs) == "table",
+                        label .. " remote sink requires inputs"
+                    )
+
+                    node.inputs = bindingList(node.inputs)
+
+                    for _, binding in ipairs(node.inputs) do
+                        assert(
+                            binding.accessor == nil,
+                            label .. " remote sink cannot publish an "
+                            .. "accessor binding; publish the derived "
+                            .. "value on its own signal instead"
+                        )
+
+                        self.publishSignals[binding.signal] = true
+                    end
                 else
                     error(label .. " cannot be a remote processor")
                 end
             else
-                assert(type(node.component) == "string",
-                    label .. " requires a component ID")
-                assert(self.components[node.component],
+                assert(
+                    type(node.component) == "string",
+                    label .. " requires a component ID"
+                )
+                assert(
+                    self.components[node.component],
                     label .. " references an unregistered component: "
-                    .. node.component)
+                    .. node.component
+                )
 
                 if node.role == "source" then
-                    assert(type(node.output) == "string",
-                        label .. " source requires an output")
-                    assert(node.inputs == nil,
-                        label .. " source cannot have inputs")
+                    assert(
+                        type(node.output) == "string",
+                        label .. " source requires an output"
+                    )
+                    assert(
+                        node.inputs == nil,
+                        label .. " source cannot have inputs"
+                    )
                 elseif node.role == "processor" then
-                    assert(type(node.output) == "string",
-                        label .. " processor requires an output")
-                    assert(type(node.inputs) == "table",
-                        label .. " processor requires inputs")
+                    assert(
+                        type(node.output) == "string",
+                        label .. " processor requires an output"
+                    )
+                    assert(
+                        type(node.inputs) == "table",
+                        label .. " processor requires inputs"
+                    )
+
+                    node.inputs = bindingList(node.inputs)
                 else
-                    assert(node.output == nil,
-                        label .. " sink cannot have an output")
-                    assert(type(node.inputs) == "table",
-                        label .. " sink requires inputs")
+                    assert(
+                        node.output == nil,
+                        label .. " sink cannot have an output"
+                    )
+                    assert(
+                        type(node.inputs) == "table",
+                        label .. " sink requires inputs"
+                    )
+
+                    node.inputs = bindingList(node.inputs)
                 end
 
-                -- Only local source/processor nodes are local producers.
+                -- Each output signal has at most one local producer.
                 if node.output then
-                    assert(not self.localOutputs[node.output],
-                        "Multiple local producers for signal: " .. node.output)
+                    assert(
+                        not self.localOutputs[node.output],
+                        "Multiple local producers for signal: "
+                        .. node.output
+                    )
 
                     self.localOutputs[node.output] = true
                 end
-            end
 
-            -- Only executable local processors/sinks need input subscriptions.
-            if not node.remote and node.role ~= "source" then
-                for _, binding in pairs(node.inputs or {}) do
-                    local signal = resolveBinding(binding)
-                    self.neededSignals[signal] = true
-                end
-            end
-
-            -- Remote sinks declare which locally produced signals to publish.
-            if node.remote and node.role == "sink" then
-                for _, binding in pairs(node.inputs) do
-                    local signal = resolveBinding(binding)
-                    self.publishSignals[signal] = true
+                -- Collect the underlying signal names, not accessors.
+                if node.role ~= "source" then
+                    for _, binding in ipairs(node.inputs) do
+                        self.neededSignals[binding.signal] = true
+                    end
                 end
             end
         end
     end
 
-    -- Pass 2: determine which signals must arrive over the bus.
+    -- Determine which dependencies must be received remotely.
     for signal in pairs(self.neededSignals) do
         if not self.localOutputs[signal] then
             self.remoteSignals[signal] = true
@@ -168,14 +261,16 @@ function Runtime.new(config)
         end
     end
 
-    -- A remote sink may only publish a signal produced locally.
+    -- Only locally produced signals may be published.
     for signal in pairs(self.publishSignals) do
-        assert(self.localOutputs[signal],
+        assert(
+            self.localOutputs[signal],
             "Remote sink can only publish a locally produced signal: "
-            .. signal)
+            .. signal
+        )
     end
 
-    -- Do not create a bus if this flow has no external communication.
+    -- Open messaging only when remote I/O is required.
     local needsBus = next(self.remoteSignals) ~= nil
         or next(self.publishSignals) ~= nil
 
@@ -195,15 +290,17 @@ function Runtime:_receiveBatch()
         return {}
     end
 
-    -- Collapse each incoming batch to its latest value per topic.
+    -- Keep only the latest received value for each relevant topic.
     local received = {}
 
     for _, message in ipairs(self.bus:getMessages() or {}) do
-        if message.topic and (
-                self.neededSignals[message.topic]
-                or self.explicitRemoteSignals[message.topic]
+        local topic = message.topic
+
+        if type(topic) == "string" and (
+                self.neededSignals[topic]
+                or self.explicitRemoteSignals[topic]
             ) then
-            received[message.topic] = message.content
+            received[topic] = message.content
         end
     end
 
@@ -215,34 +312,45 @@ function Runtime:_publishBatch(batch)
         return
     end
 
-    assert(type(self.bus.publishBatch) == "function",
-        "Messaging bus must implement publishBatch(batch)")
+    assert(
+        type(self.bus.publishBatch) == "function",
+        "Messaging bus must implement publishBatch(batch)"
+    )
 
     self.bus:publishBatch(batch)
 end
 
+-- Resolve bindings into a positional argument list.
+-- Return an explicit argument count so nil optional arguments
+-- do not shift or truncate later arguments.
 function Runtime:_resolveInputs(bindings)
-    local inputs = {}
+    local args = {}
+    local count = 0
 
-    for name, binding in pairs(bindings or {}) do
-        local signal, optional = resolveBinding(binding)
-        local value = self.signals[signal]
+    for index, rawBinding in ipairs(bindings or {}) do
+        local binding = resolveBinding(rawBinding)
+        local value = self.signals[binding.signal]
 
-        if value == nil and not optional then
-            return nil, false
+        if value ~= nil then
+            value = resolveAccessor(value, binding.accessor)
         end
 
-        inputs[name] = value
+        if value == nil and not binding.optional then
+            return nil, count, false
+        end
+
+        count = index
+        args[index] = value
     end
 
-    return inputs, true
+    return args, count, true
 end
 
 function Runtime:_inputsChanged(bindings, changed)
-    for _, binding in pairs(bindings or {}) do
-        local signal = resolveBinding(binding)
+    for _, rawBinding in ipairs(bindings or {}) do
+        local binding = resolveBinding(rawBinding)
 
-        if changed[signal] then
+        if changed[binding.signal] then
             return true
         end
     end
@@ -252,7 +360,7 @@ end
 
 function Runtime:_setSignal(signal, value, changed, outgoing)
     if value == nil then
-        -- nil means no new output; retain the previous value.
+        -- A nil output means no update. Retain the cached value.
         return
     end
 
@@ -265,6 +373,7 @@ function Runtime:_setSignal(signal, value, changed, outgoing)
     self.signals[signal] = value
     changed[signal] = true
 
+    -- Only explicitly declared remote sink signals are published.
     if self.publishSignals[signal] then
         outgoing[signal] = {
             topic = signal,
@@ -273,50 +382,50 @@ function Runtime:_setSignal(signal, value, changed, outgoing)
     end
 end
 
-function Runtime:_executeNode(node, changed, outgoing)
+function Runtime:_executeNode(node, changed)
     if node.remote then
-        return
+        return nil
     end
 
     local component = self.components[node.component]
 
-    -- This node belongs to another computer.
-    if not component then
-        return
-    end
-
-    assert(type(component.update) == "function",
-        "Component " .. node.component .. " requires update()")
+    assert(
+        component and type(component.update) == "function",
+        "Component " .. tostring(node.component)
+        .. " requires update()"
+    )
 
     if node.role == "source" then
-        -- Sources are sampled once per runtime cycle.
-        local value = component:update()
-        self:_setSignal(node.output, value, changed, outgoing)
-        return
+        return {
+            signal = node.output,
+            value = component:update(),
+        }
     end
 
-    -- Processors and sinks are event-driven.
+    -- Every node in this stage sees the same pre-stage change set.
     if not self:_inputsChanged(node.inputs, changed) then
-        return
+        return nil
     end
 
-    local inputs, ready = self:_resolveInputs(node.inputs)
+    local args, count, ready = self:_resolveInputs(node.inputs)
 
-    -- Wait until every required input has a value.
     if not ready then
-        return
+        return nil
     end
 
     if node.role == "processor" then
-        local value = component:update(inputs)
-        self:_setSignal(node.output, value, changed, outgoing)
-    else
-        component:update(inputs)
+        return {
+            signal = node.output,
+            value = component:update(unpackValues(args, 1, count)),
+        }
     end
+
+    component:update(unpackValues(args, 1, count))
+    return nil
 end
 
 function Runtime:update()
-    -- Apply all received values before evaluating any nodes.
+    -- Apply the full incoming network batch before evaluating stages.
     local received = self:_receiveBatch()
     local changed = {}
     local outgoing = {}
@@ -330,15 +439,46 @@ function Runtime:update()
         end
     end
 
-    -- Local source changes and downstream processing propagate
-    -- in declared stage/node order within this cycle.
+    -- Each stage is a parallel execution barrier.
     for _, stage in ipairs(self.flow.stages) do
-        for _, node in ipairs(stage.components) do
-            self:_executeNode(node, changed, outgoing)
+        local nodes = stage.components
+        local results = {}
+
+        if #nodes > 0 then
+            local tasks = {}
+
+            for index, node in ipairs(nodes) do
+                local nodeIndex = index
+                local currentNode = node
+
+                tasks[#tasks + 1] = function()
+                    results[nodeIndex] =
+                        self:_executeNode(currentNode, changed)
+                end
+            end
+
+            -- Wait for every node in this stage, including any that yield
+            -- while waiting for game-tick-dependent work.
+            parallel.waitForAll(unpackValues(tasks))
+        end
+
+        -- Commit outputs only after every node in the stage has completed.
+        -- Thus, nodes in the same stage cannot consume each other's outputs.
+        for index = 1, #nodes do
+            local result = results[index]
+
+            if result then
+                self:_setSignal(
+                    result.signal,
+                    result.value,
+                    changed,
+                    outgoing
+                )
+            end
         end
     end
 
-    -- Send all changed local outputs as one network batch.
+    -- Publish accumulated changes as a single batch.
     local batch = {}
 
     for _, message in pairs(outgoing) do
@@ -358,6 +498,10 @@ function Runtime:_runLoop()
 end
 
 function Runtime:run()
+    if self.running then
+        return
+    end
+
     if self.bus then
         parallel.waitForAll(
             function()

@@ -1,14 +1,22 @@
 local Sink = {}
 
-function Sink.new(id, apply)
-    assert(type(apply) == "function", "Actuator requires apply")
+local Validation = require("utils.validation")
+local assertString = Validation.assertString
 
-    return {
+function Sink.new(id, apply)
+    assertString(id, "Sink requires an id")
+    assert(type(apply) == "function", "Sink requires an apply function")
+
+    local sink = {
         id = id,
-        update = function(self, inputs, signals, context)
-            apply(inputs, signals, context)
-        end,
+        role = "sink",
     }
+
+    function sink:update(...)
+        apply(...)
+    end
+
+    return sink
 end
 
 return Sink
