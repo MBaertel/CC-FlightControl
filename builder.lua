@@ -370,8 +370,8 @@ function Builder:_addRemoteSource(signal, config)
 end
 
 function Builder:source(componentOrSignal, inputs, output, config)
+    -- Remote source: source(signal [, config])
     if type(componentOrSignal) == "string" then
-        -- Remote source: source(signal [, config])
         assert(
             output == nil,
             "Remote source accepts a signal and optional config"
@@ -382,30 +382,47 @@ function Builder:source(componentOrSignal, inputs, output, config)
                 type(inputs) == "table",
                 "Remote source config must be a table"
             )
+
+            assert(
+                config == nil,
+                "Remote source config was provided twice"
+            )
+
             config = inputs
         end
 
         return self:_addRemoteSource(componentOrSignal, config)
     end
 
+    -- Validate local source component.
     assert(
         isComponent(componentOrSignal),
         "Local source requires a component instance"
     )
 
-    -- Support source(component, output, config) as a convenience form.
-    if type(inputs) == "string" and type(output) == "table"
-        and config == nil then
-        config = output
-        output = inputs
-        inputs = nil
+    -- Support:
+    -- source(component, output)
+    -- source(component, output, config)
+    if type(inputs) == "string" then
+        if output == nil then
+            -- source(component, output)
+            output = inputs
+            inputs = nil
+        elseif type(output) == "table" and config == nil then
+            -- source(component, output, config)
+            config = output
+            output = inputs
+            inputs = nil
+        end
     end
 
+    -- Sources cannot have input bindings.
     assert(
         inputs == nil,
         "Source cannot have inputs"
     )
 
+    -- Validate output signal.
     assert(
         type(output) == "string" and output ~= "",
         "Local source requires an output signal"
