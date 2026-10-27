@@ -56,6 +56,66 @@ function Processors.PID(id, kp, ki, kd, minOutput, maxOutput)
     return processor
 end
 
+function Processors.add(id)
+    assertString(id, "Add requires an id")
+
+    local processor = {
+        id = id,
+        role = "processor",
+        args = { "a", "b" },
+        lastRun = nil,
+    }
+
+    function processor:update(a, b)
+        return a + b
+    end
+end
+
+function Processors.subtract(id)
+    assertString(id, "Subtract requires an id")
+
+    local processor = {
+        id = id,
+        role = "processor",
+        args = { "a", "b" },
+        lastRun = nil,
+    }
+
+    function processor:update(a, b)
+        return a - b
+    end
+end
+
+function Processors.multiply(id)
+    assertString(id, "Multiply requires an id")
+
+    local processor = {
+        id = id,
+        role = "processor",
+        args = { "a", "b" },
+        lastRun = nil,
+    }
+
+    function processor:update(a, b)
+        return a * b
+    end
+end
+
+function Processors.divide(id)
+    assertString(id, "Divide requires an id")
+
+    local processor = {
+        id = id,
+        role = "processor",
+        args = { "a", "b" },
+        lastRun = nil,
+    }
+
+    function processor:update(a, b)
+        return a / b
+    end
+end
+
 function Processors.Delay(id, delaySeconds)
     assertString(id, "Delay requires an id")
     assert(
