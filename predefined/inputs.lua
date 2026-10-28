@@ -150,7 +150,35 @@ function Inputs.steeringWheel(id, peripheralName, normalized)
     return source
 end
 
--- Preserve compatibility with existing callers.
-Inputs.SteeringWheel = Inputs.steeringWheel
+function Inputs.redstone(id, peripheralName, peripheralSide)
+    assertString(id, "Lever requires an id")
+    assertString(peripheralSide, "Lever requires a peripheral side to read")
+
+    local relay = nil
+    if (peripheralName ~= nil) then
+        relay = wrapPeripheral(peripheralName)
+    end
+
+    local source = {
+        id = id,
+        role = "source",
+    }
+
+    function source:update()
+        local input = nil
+        if relay == nil then
+            input = redstone.getAnalogInput(peripheralSide)
+        else
+            input = relay.getAnalogInput(peripheralSide)
+        end
+
+        return {
+            raw = input,
+            normalized = input / 15
+        }
+    end
+
+    return source
+end
 
 return Inputs

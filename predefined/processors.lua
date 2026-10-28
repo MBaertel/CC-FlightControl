@@ -116,6 +116,22 @@ function Processors.divide(id)
     end
 end
 
+function Processors.normalize(id)
+    assertString(id, "Processor requires an id")
+    local processor = {
+        id = id,
+        role = "processor",
+        args = { "value" },
+        lastRun = nil,
+    }
+
+    function processor:update(value)
+        return math.max(-1, math.min(value, 1))
+    end
+
+    return processor
+end
+
 function Processors.Delay(id, delaySeconds)
     assertString(id, "Delay requires an id")
     assert(
