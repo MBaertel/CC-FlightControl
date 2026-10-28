@@ -147,4 +147,30 @@ function Actuators.balloonBurner(id, peripheralName)
     }
 end
 
+function Actuators.redstoneTransmission(id, peripheralName, reverseRelay, reverseOutputSide)
+    assertString(id, "Actuator requires an id")
+    assert(
+        peripheralName == nil or type(peripheralName) == "string",
+        "Relay name must be a string or nil"
+    )
+
+    local transmission = wrapPeripheral(peripheralName)
+    local relay = reverseRelay and wrapPeripheral(reverseRelay) or nil
+
+    return {
+        id = id,
+        role = "sink",
+
+        update = function(_, value)
+            local normalizedValue = clamp(value, -1, 1)
+            local outputValue =
+                modulateFunctions.redstoneUnipolar(math.abs(normalizedValue))
+            if (reverseOutputSide ~= nil) then
+                setDigital(relay, reverseOutputSide, normalizedValue < 0)
+            end
+            transmission.setShiftLevel(math.floor(outputValue))
+        end,
+    }
+end
+
 return Actuators
