@@ -103,8 +103,7 @@ function Actuators.redstoneReversible(
 
         update = function(_, value)
             local normalizedValue = clamp(value, -1, 1)
-            local outputValue =
-                modulateFunctions.redstoneUnipolar(math.abs(normalizedValue))
+            local outputValue = math.abs(normalizedValue) * 15
 
             setDigital(
                 directionRelay,
@@ -163,8 +162,7 @@ function Actuators.redstoneTransmission(id, peripheralName, reverseRelay, revers
 
         update = function(_, value)
             local normalizedValue = clamp(value, -1, 1)
-            local outputValue =
-                modulateFunctions.redstoneUnipolar(math.abs(normalizedValue))
+            local outputValue = math.abs(normalizedValue) * 15
             if (reverseOutputSide ~= nil) then
                 setDigital(relay, reverseOutputSide, normalizedValue < 0)
             end
